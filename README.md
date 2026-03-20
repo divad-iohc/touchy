@@ -9,8 +9,6 @@ Right now it supports:
 - optional `Touch to Click` behavior for touch gestures
 - global middle-click remapping
 
-`Touchy` is experimental. It uses a private multitouch framework, so it is not App Store-safe and may break across macOS updates.
-
 ## Develop
 
 The app lives in `mac-app/`.
