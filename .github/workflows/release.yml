@@ -1,0 +1,67 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check Out Repository
+        uses: actions/checkout@v4
+
+      - name: Prepare Release Metadata
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            version="${GITHUB_REF_NAME#v}"
+            archive_name="Touchy-${GITHUB_REF_NAME}-macOS"
+            release_tag="${GITHUB_REF_NAME}"
+          else
+            version="0.0.0-dev"
+            archive_name="Touchy-manual-${GITHUB_RUN_NUMBER}-macOS"
+            release_tag=""
+          fi
+
+          echo "TOUCHY_VERSION=${version}" >> "${GITHUB_ENV}"
+          echo "TOUCHY_BUILD_NUMBER=${GITHUB_RUN_NUMBER}" >> "${GITHUB_ENV}"
+          echo "ARCHIVE_NAME=${archive_name}" >> "${GITHUB_ENV}"
+          echo "RELEASE_TAG=${release_tag}" >> "${GITHUB_ENV}"
+
+      - name: Package macOS App
+        run: zsh mac-app/scripts/package-release.sh "${ARCHIVE_NAME}"
+
+      - name: Upload Workflow Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARCHIVE_NAME }}
+          path: |
+            mac-app/dist/${{ env.ARCHIVE_NAME }}.zip
+            mac-app/dist/${{ env.ARCHIVE_NAME }}.zip.sha256
+          if-no-files-found: error
+          compression-level: 0
+
+      - name: Publish GitHub Release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            gh release upload "${RELEASE_TAG}" \
+              "mac-app/dist/${ARCHIVE_NAME}.zip" \
+              "mac-app/dist/${ARCHIVE_NAME}.zip.sha256" \
+              --clobber
+          else
+            gh release create "${RELEASE_TAG}" \
+              "mac-app/dist/${ARCHIVE_NAME}.zip" \
+              "mac-app/dist/${ARCHIVE_NAME}.zip.sha256" \
+              --title "${RELEASE_TAG}" \
+              --generate-notes
+          fi

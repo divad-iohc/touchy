@@ -1,0 +1,6 @@
+.DS_Store
+.codex/
+
+mac-app/.build/
+mac-app/dist/
+mac-app/AppBundle/Resources/
