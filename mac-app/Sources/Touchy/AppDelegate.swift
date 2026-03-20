@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import ServiceManagement
 import SwiftUI
 
 @MainActor
@@ -7,12 +8,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let configuration = GestureConfigurationStore.shared
     private lazy var settingsModel = SettingsViewModel(
         actions: currentActions(),
+        shortcuts: currentShortcuts(),
         touchToClickEnabled: configuration.touchToClickEnabled()
     )
     private lazy var remapper = GlobalGestureRemapper(
         actions: currentActions(),
+        shortcuts: currentShortcuts(),
         touchToClickEnabled: configuration.touchToClickEnabled()
     )
+    private let launchAtLoginController = LaunchAtLoginController()
 
     private var window: NSWindow?
     private var statusItem: NSStatusItem?
@@ -31,10 +35,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         configureStatusItem()
         buildWindow()
         wireRemapper()
+        refreshLaunchAtLoginStatus()
         refreshPermissionStatus()
         remapper.start()
-        DispatchQueue.main.async { [weak self] in
-            self?.showSettingsWindow(nil)
+        if configuration.consumeInitialSettingsPresentation() {
+            DispatchQueue.main.async { [weak self] in
+                self?.showSettingsWindow(nil)
+            }
         }
     }
 
@@ -99,8 +106,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             onActionChanged: { [weak self] gesture, action in
                 self?.updateAction(action, for: gesture)
             },
+            onShortcutChanged: { [weak self] gesture, shortcut in
+                self?.updateShortcut(shortcut, for: gesture)
+            },
             onTouchToClickChanged: { [weak self] enabled in
                 self?.updateTouchToClick(enabled)
+            },
+            onLaunchAtLoginChanged: { [weak self] enabled in
+                self?.updateLaunchAtLogin(enabled)
             },
             onRequestAccessibility: { [weak self] in
                 self?.promptForAccessibility(nil)
@@ -123,10 +136,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         remapper.setAction(action, for: gesture)
     }
 
+    private func updateShortcut(_ shortcut: KeyboardShortcut?, for gesture: GestureKind) {
+        configuration.setShortcut(shortcut, for: gesture)
+        settingsModel.setShortcut(shortcut, for: gesture)
+        remapper.setShortcut(shortcut, for: gesture)
+    }
+
     private func updateTouchToClick(_ enabled: Bool) {
         configuration.setTouchToClickEnabled(enabled)
         settingsModel.setTouchToClickEnabled(enabled)
         remapper.setTouchToClickEnabled(enabled)
+    }
+
+    private func updateLaunchAtLogin(_ enabled: Bool) {
+        let result = launchAtLoginController.setEnabled(enabled)
+        settingsModel.updateLaunchAtLogin(enabled: result.enabled, detail: result.detail)
     }
 
     private func configureStatusItem() {
@@ -165,6 +189,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func refreshPermissionStatus() {
         refreshStatusDisplay(from: nil)
+    }
+
+    private func refreshLaunchAtLoginStatus() {
+        let result = launchAtLoginController.currentState()
+        settingsModel.updateLaunchAtLogin(enabled: result.enabled, detail: result.detail)
     }
 
     private func refreshStatusDisplay(from remapperStatus: String?) {
@@ -209,6 +238,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         })
     }
 
+    private func currentShortcuts() -> [GestureKind: KeyboardShortcut] {
+        Dictionary(uniqueKeysWithValues: GestureKind.allCases.compactMap { gesture in
+            configuration.shortcut(for: gesture).map { (gesture, $0) }
+        })
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         remapper.stop()
     }
@@ -218,5 +253,58 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             showSettingsWindow(nil)
         }
         return true
+    }
+}
+
+@MainActor
+private final class LaunchAtLoginController {
+    struct State {
+        let enabled: Bool
+        let detail: String
+    }
+
+    func currentState() -> State {
+        guard #available(macOS 13.0, *) else {
+            return State(enabled: false, detail: "Launch at login requires macOS 13 or newer.")
+        }
+
+        let service = SMAppService.mainApp
+        switch service.status {
+        case .enabled:
+            return State(enabled: true, detail: "")
+        case .requiresApproval:
+            return State(enabled: false, detail: "Approve Touchy in System Settings > Login Items.")
+        case .notFound:
+            return State(enabled: false, detail: "Available in the packaged app.")
+        case .notRegistered:
+            return State(enabled: false, detail: "")
+        @unknown default:
+            return State(enabled: false, detail: "Launch at login status is unavailable.")
+        }
+    }
+
+    func setEnabled(_ enabled: Bool) -> State {
+        guard #available(macOS 13.0, *) else {
+            return State(enabled: false, detail: "Launch at login requires macOS 13 or newer.")
+        }
+
+        let service = SMAppService.mainApp
+
+        do {
+            if enabled {
+                try service.register()
+            } else {
+                try service.unregister()
+            }
+            return currentState()
+        } catch {
+            let fallback = currentState()
+            return State(enabled: fallback.enabled, detail: launchAtLoginErrorDetail(error, fallback: fallback.detail))
+        }
+    }
+
+    private func launchAtLoginErrorDetail(_ error: Error, fallback: String) -> String {
+        _ = error as NSError
+        return fallback.isEmpty ? "Touchy could not update launch at login." : fallback
     }
 }

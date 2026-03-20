@@ -1,52 +1,28 @@
 # Touchy
 
-`Touchy` is an experimental macOS menu bar utility for remapping:
+`Touchy` is a small macOS menu bar app for remapping trackpad gestures.
 
-- 3-finger click
-- 4-finger click
+Right now it supports:
 
-The active Swift project lives in `mac-app/`.
+- `3-Finger Click`
+- `4-Finger Click`
+- optional `Touch to Click` behavior for touch gestures
+- global middle-click remapping
 
-## Why Swift
+`Touchy` is experimental. It uses a private multitouch framework, so it is not App Store-safe and may break across macOS updates.
 
-Swift is the pragmatic choice because the UI shell, event tap integration, and macOS permissions flow all live on the AppKit side.
+## Develop
 
-## Current scope
+The app lives in `mac-app/`.
 
-This version is intentionally a menu bar utility:
-
-- It runs without a Dock icon.
-- It exposes a settings window from the macOS menu bar.
-- It lets you assign a basic action to `3-Finger Click` and `4-Finger Click`.
-- It includes a `Touch to Click` toggle so touch can reuse the click actions.
-- If `Touch to Click` is off, you can assign separate actions to `3-Finger Touch` and `4-Finger Touch`.
-- It attempts to remap those clicks globally, including in other apps.
-
-## Important macOS limitation
-
-This app uses a private multitouch framework to detect global trackpad finger counts. That means it is experimental, not App Store-safe, and may break across macOS updates. macOS may also reserve some three-finger or four-finger gestures for Mission Control, App Expose, desktop switching, and related system features. For reliable testing, you may need to disable conflicting trackpad gestures in System Settings.
-
-## Run
-
-For development from Terminal:
+Run it in development:
 
 ```bash
 cd mac-app
 swift run
 ```
 
-When the app is running:
-
-- Look for `Touchy` in the macOS menu bar.
-- Open `Settings...` from the menu bar item.
-- Grant Accessibility access when prompted.
-- If global remapping still does not work, also allow Input Monitoring in System Settings.
-- Set `3-Finger Click` to `Middle Click`.
-- Test in another app, such as closing a browser tab with middle click.
-
-## Build A Normal App Bundle
-
-To create a Finder-launchable app:
+Build a Finder-launchable app:
 
 ```bash
 cd mac-app
@@ -59,34 +35,21 @@ That produces:
 mac-app/dist/Touchy.app
 ```
 
-You can then open it from Finder or with:
+When testing:
 
-```bash
-open "dist/Touchy.app"
-```
+- open `Touchy` from the menu bar
+- grant Accessibility access
+- allow Input Monitoring too if remapping still does not work
+- watch for conflicts with built-in macOS trackpad gestures
 
-## Release On GitHub
+## Contribute
 
-This repo includes a GitHub Actions workflow at `.github/workflows/release.yml`.
+Pull requests are welcome.
 
-To publish a downloadable release:
+If you want to work on the app:
 
-```bash
-git tag v0.1.0
-git push origin main --tags
-```
+- keep changes focused
+- test the menu bar flow and gesture remapping behavior
+- update the UI and packaging scripts together when needed
 
-That workflow:
-
-- builds the macOS app on a GitHub-hosted macOS runner
-- packages `Touchy.app` as a zip archive
-- generates a SHA-256 checksum
-- creates or updates the matching GitHub Release and uploads both files
-
-You can also run the workflow manually from the GitHub Actions tab to produce a build artifact without publishing a tagged release.
-
-## Pull Request Builds
-
-This repo also includes `.github/workflows/pull-request.yml`.
-
-That workflow runs on pull requests to `main`, on pushes to `main`, and on manual dispatch. It builds the app, packages it as a zip, and uploads the archive plus checksum as workflow artifacts so changes can be validated before a tagged release.
+GitHub Actions builds pull requests and tagged releases automatically.

@@ -12,8 +12,8 @@ final class GlobalGestureRemapper {
     private var eventTap: CFMachPort?
     private var eventTapSource: CFRunLoopSource?
 
-    init(actions: [GestureKind: GestureAction], touchToClickEnabled: Bool) {
-        self.state = SharedRemapState(actions: actions, touchToClickEnabled: touchToClickEnabled)
+    init(actions: [GestureKind: GestureAction], shortcuts: [GestureKind: KeyboardShortcut], touchToClickEnabled: Bool) {
+        self.state = SharedRemapState(actions: actions, shortcuts: shortcuts, touchToClickEnabled: touchToClickEnabled)
         self.multitouchWatcher = MultitouchWatcher(state: state)
         self.multitouchWatcher?.onTouchExecution = { [weak self] execution in
             self?.handleTouchExecution(execution)
@@ -62,6 +62,15 @@ final class GlobalGestureRemapper {
     func setAction(_ action: GestureAction, for gesture: GestureKind) {
         state.setAction(action, for: gesture)
         postStatus("\(gesture.title) now maps to \(action.title).")
+    }
+
+    func setShortcut(_ shortcut: KeyboardShortcut?, for gesture: GestureKind) {
+        state.setShortcut(shortcut, for: gesture)
+        if let shortcut {
+            postStatus("\(gesture.title) now triggers \(shortcut.title).")
+        } else {
+            postStatus("\(gesture.title) shortcut was cleared.")
+        }
     }
 
     func setTouchToClickEnabled(_ enabled: Bool) {
@@ -122,25 +131,39 @@ final class GlobalGestureRemapper {
             postStatus("The mouse event tap was re-enabled after macOS paused it.")
             return Unmanaged.passUnretained(event)
         case .leftMouseDown:
-            guard state.beginRemapIfNeeded() != nil else {
+            guard let execution = state.beginRemapIfNeeded() else {
                 return Unmanaged.passUnretained(event)
             }
 
-            postMiddleClick(from: event, as: .otherMouseDown)
+            switch execution.action {
+            case .none:
+                return Unmanaged.passUnretained(event)
+            case .middleClick:
+                postMiddleClick(from: event, as: .otherMouseDown)
+            case .keyboardShortcut:
+                postKeyboardShortcut(execution.shortcut)
+            }
             return nil
         case .leftMouseDragged:
-            guard state.activeRemapGesture() != nil else {
-                return Unmanaged.passUnretained(event)
+            if let execution = state.activeRemapExecution(), execution.action == .middleClick {
+                postMiddleClick(from: event, as: .otherMouseDragged)
+                return nil
             }
 
-            postMiddleClick(from: event, as: .otherMouseDragged)
+            guard state.isSuppressingClickSequence() else {
+                return Unmanaged.passUnretained(event)
+            }
             return nil
         case .leftMouseUp:
-            guard state.finishRemap() != nil else {
-                return Unmanaged.passUnretained(event)
+            let wasSuppressingClickSequence = state.isSuppressingClickSequence()
+            if let execution = state.finishRemap(), execution.action == .middleClick {
+                postMiddleClick(from: event, as: .otherMouseUp)
+                return nil
             }
 
-            postMiddleClick(from: event, as: .otherMouseUp)
+            guard wasSuppressingClickSequence else {
+                return Unmanaged.passUnretained(event)
+            }
             return nil
         default:
             return Unmanaged.passUnretained(event)
@@ -169,7 +192,32 @@ final class GlobalGestureRemapper {
             return
         case .middleClick:
             postSyntheticMiddleClick()
+        case .keyboardShortcut:
+            postKeyboardShortcut(execution.shortcut)
         }
+    }
+
+    private func postKeyboardShortcut(_ shortcut: KeyboardShortcut?) {
+        guard let shortcut else {
+            return
+        }
+
+        guard let keyDown = CGEvent(
+            keyboardEventSource: CGEventSource(stateID: .hidSystemState),
+            virtualKey: shortcut.keyCode,
+            keyDown: true
+        ), let keyUp = CGEvent(
+            keyboardEventSource: CGEventSource(stateID: .hidSystemState),
+            virtualKey: shortcut.keyCode,
+            keyDown: false
+        ) else {
+            return
+        }
+
+        keyDown.flags = shortcut.eventFlags
+        keyUp.flags = shortcut.eventFlags
+        keyDown.post(tap: .cghidEventTap)
+        keyUp.post(tap: .cghidEventTap)
     }
 
     private func postSyntheticMiddleClick() {
