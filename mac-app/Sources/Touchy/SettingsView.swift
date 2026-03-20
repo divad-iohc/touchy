@@ -3,14 +3,20 @@ import SwiftUI
 @MainActor
 final class SettingsViewModel: ObservableObject {
     @Published private(set) var actions: [GestureKind: GestureAction]
+    @Published private(set) var shortcuts: [GestureKind: KeyboardShortcut]
     @Published private(set) var touchToClickEnabled: Bool
+    @Published private(set) var launchAtLoginEnabled: Bool
+    @Published private(set) var launchAtLoginDetail: String
     @Published private(set) var statusTitle: String
     @Published private(set) var statusDetail: String
     @Published private(set) var isActive: Bool
 
-    init(actions: [GestureKind: GestureAction], touchToClickEnabled: Bool) {
+    init(actions: [GestureKind: GestureAction], shortcuts: [GestureKind: KeyboardShortcut], touchToClickEnabled: Bool) {
         self.actions = actions
+        self.shortcuts = shortcuts
         self.touchToClickEnabled = touchToClickEnabled
+        self.launchAtLoginEnabled = false
+        self.launchAtLoginDetail = ""
         self.statusTitle = "Needs Access"
         self.statusDetail = "Accessibility access is required before Touchy can remap gestures."
         self.isActive = false
@@ -24,12 +30,33 @@ final class SettingsViewModel: ObservableObject {
         action(for: gesture.pairedClickGesture)
     }
 
+    func shortcut(for gesture: GestureKind) -> KeyboardShortcut? {
+        shortcuts[gesture]
+    }
+
+    func inheritedShortcut(for gesture: GestureKind) -> KeyboardShortcut? {
+        shortcut(for: gesture.pairedClickGesture)
+    }
+
     func setAction(_ action: GestureAction, for gesture: GestureKind) {
         actions[gesture] = action
     }
 
+    func setShortcut(_ shortcut: KeyboardShortcut?, for gesture: GestureKind) {
+        if let shortcut {
+            shortcuts[gesture] = shortcut
+        } else {
+            shortcuts.removeValue(forKey: gesture)
+        }
+    }
+
     func setTouchToClickEnabled(_ enabled: Bool) {
         touchToClickEnabled = enabled
+    }
+
+    func updateLaunchAtLogin(enabled: Bool, detail: String) {
+        launchAtLoginEnabled = enabled
+        launchAtLoginDetail = detail
     }
 
     func updateStatus(title: String, detail: String, isActive: Bool) {
@@ -43,7 +70,9 @@ struct TouchySettingsView: View {
     @ObservedObject var model: SettingsViewModel
 
     let onActionChanged: (GestureKind, GestureAction) -> Void
+    let onShortcutChanged: (GestureKind, KeyboardShortcut?) -> Void
     let onTouchToClickChanged: (Bool) -> Void
+    let onLaunchAtLoginChanged: (Bool) -> Void
     let onRequestAccessibility: () -> Void
     let onRefreshStatus: () -> Void
 
@@ -61,6 +90,7 @@ struct TouchySettingsView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     heroCard
+                    appPanel
                     gesturePanel
                 }
                 .padding(22)
@@ -164,12 +194,51 @@ struct TouchySettingsView: View {
                             gesture: gesture,
                             selectedAction: model.action(for: gesture),
                             inheritedAction: model.inheritedAction(for: gesture),
+                            selectedShortcut: model.shortcut(for: gesture),
+                            inheritedShortcut: model.inheritedShortcut(for: gesture),
                             isInherited: model.touchToClickEnabled && gesture.isTouchGesture,
-                            onActionChanged: { onActionChanged(gesture, $0) }
+                            onActionChanged: { onActionChanged(gesture, $0) },
+                            onShortcutChanged: { onShortcutChanged(gesture, $0) }
                         )
                     }
                 }
                 .animation(accessibilityReduceMotion ? nil : .spring(response: 0.28, dampingFraction: 0.88), value: model.touchToClickEnabled)
+            }
+        }
+    }
+
+    private var appPanel: some View {
+        TouchyPanel(title: "App", symbolName: "power") {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .center, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Launch at Login")
+                            .font(.system(size: 14, weight: .semibold, design: .rounded))
+                            .foregroundStyle(TouchyPalette.ink)
+
+                        Text("Start Touchy automatically after you sign in.")
+                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .foregroundStyle(TouchyPalette.subtleInk)
+                    }
+
+                    Spacer(minLength: 12)
+
+                    Toggle("", isOn: Binding(
+                        get: { model.launchAtLoginEnabled },
+                        set: { newValue in
+                            onLaunchAtLoginChanged(newValue)
+                        }
+                    ))
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                }
+
+                if !model.launchAtLoginDetail.isEmpty {
+                    Text(model.launchAtLoginDetail)
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(TouchyPalette.subtleInk)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
     }
@@ -196,8 +265,13 @@ private struct GestureTile: View {
     let gesture: GestureKind
     let selectedAction: GestureAction
     let inheritedAction: GestureAction
+    let selectedShortcut: KeyboardShortcut?
+    let inheritedShortcut: KeyboardShortcut?
     let isInherited: Bool
     let onActionChanged: (GestureAction) -> Void
+    let onShortcutChanged: (KeyboardShortcut?) -> Void
+
+    @State private var isRecordingShortcut = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -254,6 +328,32 @@ private struct GestureTile: View {
                 .font(.system(size: 11.5, weight: .medium, design: .rounded))
                 .foregroundStyle(TouchyPalette.subtleInk)
                 .fixedSize(horizontal: false, vertical: true)
+
+            if effectiveAction == .keyboardShortcut {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 10) {
+                        Button(effectiveShortcut?.title ?? "Record Shortcut") {
+                            if !isInherited {
+                                isRecordingShortcut = true
+                            }
+                        }
+                        .buttonStyle(TouchySecondaryButtonStyle())
+                        .disabled(isInherited)
+
+                        if !isInherited, selectedShortcut != nil {
+                            Button("Clear") {
+                                onShortcutChanged(nil)
+                            }
+                            .buttonStyle(TouchyGhostButtonStyle())
+                        }
+                    }
+
+                    Text(shortcutHint)
+                        .font(.system(size: 11.5, weight: .medium, design: .rounded))
+                        .foregroundStyle(TouchyPalette.subtleInk)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -265,6 +365,37 @@ private struct GestureTile: View {
             RoundedRectangle(cornerRadius: 24, style: .continuous)
                 .stroke(isInherited ? TouchyPalette.primary.opacity(0.28) : Color.white.opacity(0.65), lineWidth: 1)
         )
+        .sheet(isPresented: $isRecordingShortcut) {
+            ShortcutCaptureSheet(
+                initialShortcut: selectedShortcut,
+                onCancel: { isRecordingShortcut = false },
+                onClear: {
+                    onShortcutChanged(nil)
+                    isRecordingShortcut = false
+                },
+                onCapture: { shortcut in
+                    onShortcutChanged(shortcut)
+                    isRecordingShortcut = false
+                }
+            )
+            .frame(minWidth: 360, minHeight: 210)
+        }
+    }
+
+    private var effectiveAction: GestureAction {
+        isInherited ? inheritedAction : selectedAction
+    }
+
+    private var effectiveShortcut: KeyboardShortcut? {
+        isInherited ? inheritedShortcut : selectedShortcut
+    }
+
+    private var shortcutHint: String {
+        if isInherited {
+            return effectiveShortcut.map { "Inherited shortcut: \($0.title)" } ?? "No shortcut is set on the paired click gesture."
+        }
+
+        return effectiveShortcut.map { "Current shortcut: \($0.title)" } ?? "No shortcut recorded yet."
     }
 }
 
@@ -329,6 +460,159 @@ private struct TouchySecondaryButtonStyle: ButtonStyle {
             )
             .opacity(configuration.isPressed ? 0.88 : 1)
             .scaleEffect(configuration.isPressed ? 0.99 : 1)
+    }
+}
+
+private struct TouchyGhostButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 12, weight: .semibold, design: .rounded))
+            .foregroundStyle(TouchyPalette.subtleInk)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(Color.white.opacity(0.55), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(Color.white.opacity(0.7), lineWidth: 1)
+            )
+            .opacity(configuration.isPressed ? 0.88 : 1)
+    }
+}
+
+private struct ShortcutCaptureSheet: View {
+    let initialShortcut: KeyboardShortcut?
+    let onCancel: () -> Void
+    let onClear: () -> Void
+    let onCapture: (KeyboardShortcut) -> Void
+
+    @State private var pendingShortcut: KeyboardShortcut?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text("Record Shortcut")
+                .font(.system(size: 22, weight: .bold, design: .rounded))
+                .foregroundStyle(TouchyPalette.ink)
+
+            Text("Press the shortcut you want Touchy to trigger. Press Delete to clear it.")
+                .font(.system(size: 13, weight: .medium, design: .rounded))
+                .foregroundStyle(TouchyPalette.subtleInk)
+                .fixedSize(horizontal: false, vertical: true)
+
+            ShortcutCaptureView(shortcut: $pendingShortcut)
+                .frame(maxWidth: .infinity)
+                .frame(height: 86)
+
+            HStack(spacing: 12) {
+                Button("Cancel", action: onCancel)
+                    .buttonStyle(TouchyGhostButtonStyle())
+
+                Button("Clear", action: onClear)
+                    .buttonStyle(TouchySecondaryButtonStyle())
+
+                Button("Save") {
+                    if let pendingShortcut {
+                        onCapture(pendingShortcut)
+                    }
+                }
+                .buttonStyle(TouchyPrimaryButtonStyle())
+                .disabled(pendingShortcut == nil)
+            }
+        }
+        .padding(22)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(TouchyPalette.windowBackground)
+        .onAppear {
+            pendingShortcut = initialShortcut
+        }
+    }
+}
+
+private struct ShortcutCaptureView: NSViewRepresentable {
+    @Binding var shortcut: KeyboardShortcut?
+
+    func makeNSView(context: Context) -> ShortcutCaptureNSView {
+        let view = ShortcutCaptureNSView()
+        view.onShortcutCaptured = { captured in
+            shortcut = captured
+        }
+        DispatchQueue.main.async {
+            view.window?.makeFirstResponder(view)
+        }
+        return view
+    }
+
+    func updateNSView(_ nsView: ShortcutCaptureNSView, context: Context) {
+        nsView.shortcut = shortcut
+        nsView.onShortcutCaptured = { captured in
+            shortcut = captured
+        }
+        DispatchQueue.main.async {
+            nsView.window?.makeFirstResponder(nsView)
+        }
+    }
+}
+
+private final class ShortcutCaptureNSView: NSView {
+    var shortcut: KeyboardShortcut?
+    var onShortcutCaptured: ((KeyboardShortcut?) -> Void)?
+
+    override var acceptsFirstResponder: Bool { true }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        window?.makeFirstResponder(self)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let path = NSBezierPath(roundedRect: bounds, xRadius: 20, yRadius: 20)
+        NSColor.white.withAlphaComponent(0.72).setFill()
+        path.fill()
+
+        NSColor.white.withAlphaComponent(0.9).setStroke()
+        path.lineWidth = 1
+        path.stroke()
+
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+
+        let title = (shortcut?.title ?? "Press Shortcut")
+        let subtitle = "Recorder is active"
+
+        title.draw(
+            in: NSRect(x: 16, y: bounds.midY - 6, width: bounds.width - 32, height: 26),
+            withAttributes: [
+                .font: NSFont.systemFont(ofSize: 22, weight: .semibold),
+                .foregroundColor: NSColor.labelColor,
+                .paragraphStyle: paragraph,
+            ]
+        )
+
+        subtitle.draw(
+            in: NSRect(x: 16, y: bounds.midY - 28, width: bounds.width - 32, height: 20),
+            withAttributes: [
+                .font: NSFont.systemFont(ofSize: 12, weight: .medium),
+                .foregroundColor: NSColor.secondaryLabelColor,
+                .paragraphStyle: paragraph,
+            ]
+        )
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 51 || event.keyCode == 117 {
+            shortcut = nil
+            onShortcutCaptured?(nil)
+            needsDisplay = true
+            return
+        }
+
+        guard let captured = KeyboardShortcut.from(event: event) else {
+            NSSound.beep()
+            return
+        }
+
+        shortcut = captured
+        onShortcutCaptured?(captured)
+        needsDisplay = true
     }
 }
 
